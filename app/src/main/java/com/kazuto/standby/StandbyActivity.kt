@@ -34,8 +34,8 @@ import com.kazuto.standby.lyrics.LyricsRepository
 import com.kazuto.standby.lyrics.LyricsState
 import com.kazuto.standby.media.MediaSessionWatcher
 import com.kazuto.standby.media.PlaybackSource
+import com.kazuto.standby.spotify.HybridPlaybackSource
 import com.kazuto.standby.spotify.SpotifyAuth
-import com.kazuto.standby.spotify.SpotifyWebPlayer
 import com.kazuto.standby.ui.StandbyScreen
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -66,7 +66,10 @@ class StandbyActivity : ComponentActivity() {
         private const val FULL_DISCONNECT_GRACE_MS = 3_000L
     }
 
-    /** 再生状態の供給元。Spotify に接続済みなら Web API、そうでなければ端末の MediaSession */
+    /**
+     * 再生状態の供給元。ふだんは端末の MediaSession。Spotify に接続済みなら、Web API で
+     * たまに答え合わせをし、食い違ったときだけ Web API に切り替える([HybridPlaybackSource])
+     */
     private lateinit var source: PlaybackSource
     private var lyricsRepo: LyricsRepository? = null
     private var lyrics: StateFlow<LyricsState> = MutableStateFlow(LyricsState())
@@ -139,10 +142,11 @@ class StandbyActivity : ComponentActivity() {
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
 
+        val watcher = MediaSessionWatcher(applicationContext).also { it.onResyncNeeded = ::resyncViaForeground }
         source = if (SpotifyAuth.isConnected(this)) {
-            SpotifyWebPlayer(applicationContext)
+            HybridPlaybackSource(applicationContext, watcher)
         } else {
-            MediaSessionWatcher(applicationContext).also { it.onResyncNeeded = ::resyncViaForeground }
+            watcher
         }
         source.start()
         if (Prefs.lyricVideo(this)) {

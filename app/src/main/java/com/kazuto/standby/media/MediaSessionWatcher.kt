@@ -73,6 +73,9 @@ class MediaSessionWatcher(private val context: Context) : PlaybackSource {
 
     private var controller: MediaController? = null
 
+    /** いま読んでいる音楽アプリのパッケージ名。セッションが無ければ null */
+    val activePackage: String? get() = controller?.packageName
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     // URI経由で読み込んだ高解像度アートのキャッシュ(直近1件) と、読み込み中のURI
@@ -344,6 +347,9 @@ class MediaSessionWatcher(private val context: Context) : PlaybackSource {
      *    送ると Connect の再生権ごとスマホに移り、他端末の再生を乗っ取って
      *    しまう(2026-09-01 実測: Mac の再生が止まりスマホから鳴り出した)
      */
+    /** タップを MediaSession に渡してよい状態か([tapsUnsafe] の逆。束ねる側が送り先を決めるのに使う) */
+    val tapsSafe: Boolean get() = !tapsUnsafe()
+
     private fun tapsUnsafe(): Boolean {
         if (fallbackSuspected || staleHidden) return true
         val np = _nowPlaying.value ?: return false

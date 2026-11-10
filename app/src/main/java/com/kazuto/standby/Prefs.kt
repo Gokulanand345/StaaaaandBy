@@ -22,6 +22,7 @@ object Prefs {
     private const val KEY_SPOTIFY_EXPIRES = "spotify_expires_at"
     private const val KEY_SPOTIFY_PKCE_VERIFIER = "spotify_pkce_verifier"
     private const val KEY_SPOTIFY_PKCE_STATE = "spotify_pkce_state"
+    private const val KEY_SPOTIFY_RATE_LIMITED_UNTIL = "spotify_rate_limited_until"
 
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -96,6 +97,8 @@ object Prefs {
         prefs(context).edit()
             .putString(KEY_SPOTIFY_CLIENT_ID, trimmed)
             .remove(KEY_SPOTIFY_ACCESS).remove(KEY_SPOTIFY_REFRESH).remove(KEY_SPOTIFY_EXPIRES)
+            // 上限は Spotify アプリ(Client ID)ごとに数えられるので、別のアプリに替えたら待ちも解く
+            .remove(KEY_SPOTIFY_RATE_LIMITED_UNTIL)
             .apply()
     }
 
@@ -136,4 +139,15 @@ object Prefs {
 
     fun clearSpotifyPkce(context: Context) =
         prefs(context).edit().remove(KEY_SPOTIFY_PKCE_VERIFIER).remove(KEY_SPOTIFY_PKCE_STATE).apply()
+
+    /**
+     * Spotify Web API が 429 を返したあと、次に呼んでよい時刻(System.currentTimeMillis())。
+     * 待ちは十数時間になることがあり、そのあいだにアプリや画面を開き直して呼ぶと
+     * 待ちが延びるおそれがあるので、メモリではなくここに残す。0 = 待ちなし。
+     */
+    fun spotifyRateLimitedUntil(context: Context): Long =
+        prefs(context).getLong(KEY_SPOTIFY_RATE_LIMITED_UNTIL, 0L)
+
+    fun setSpotifyRateLimitedUntil(context: Context, value: Long) =
+        prefs(context).edit().putLong(KEY_SPOTIFY_RATE_LIMITED_UNTIL, value).apply()
 }

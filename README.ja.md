@@ -64,7 +64,11 @@ Galaxy Z Flip 7（One UI）でしか試していません。他社製（特にXi
 
 ## Spotify Web API（任意）
 
-上で述べたスマホ側のSpotify Connectの鏡が弱点です: 数分で静かに同期が切れ、アプリ側にできることはありません。代わりにStaaaaandByは **Spotify Web API** でアカウントの再生状態を追えます。どの端末で再生していても、Spotifyのサーバーから直接、いま何が流れているかが分かります。[developer.spotify.com](https://developer.spotify.com/dashboard) で自分のSpotifyアプリを作り（Web API。所有者はPremiumが必要）、Redirect URI `staaaaandby://spotify-callback` を登録し、Client IDを設定画面のSpotifyカードに貼って接続します。サインインはAuthorization Code + PKCEなのでクライアントシークレットはありません。トークンはスマホに保存され、Spotify以外には送られません。開発モードのアプリは、User Managementに登録した最大5アカウントで使えます。接続中、スタンバイ画面は1秒ごとに `GET /me/player` を叩き、その間は外挿します。タップ操作はWeb APIを呼ぶので、再生中の端末に対して効き、スマホに再生が乗っ取られることはありません。
+上で述べたスマホ側のSpotify Connectの鏡が弱点です: 数分で静かに同期が切れ、アプリ側にできることはありません。そこでStaaaaandByは **Spotify Web API** に答え合わせを頼めます。どの端末で再生していても、Spotifyのサーバーから直接、いま何が流れているかが分かります。[developer.spotify.com](https://developer.spotify.com/dashboard) で自分のSpotifyアプリを作り（Web API。所有者はPremiumが必要）、Redirect URI `staaaaandby://spotify-callback` を登録し、Client IDを設定画面のSpotifyカードに貼って接続します。サインインはAuthorization Code + PKCEなのでクライアントシークレットはありません。トークンはスマホに保存され、Spotify以外には送られません。開発モードのアプリは、User Managementに登録した最大5アカウントで使えます。
+
+接続中も、表示の主役はMediaSessionのままで、Web APIは答え合わせ役です。スタンバイ画面が `GET /me/player` を呼ぶのは、画面を開いたとき、その後は約45秒に1回（何も再生していないときは60秒に1回）、外挿した再生位置が曲の終わりを過ぎたのにMediaSessionが次の曲を知らせてこないとき、MediaSessionが消えた・再生をやめたとき、だけです。ふだんは1分あたり1〜2回に収まります。答えがMediaSessionと食い違ったら（曲が違う、再生/停止が違う、位置が5秒以上ずれている）、鏡が切れているということなので、Web APIを主役に切り替え、MediaSessionがまた同じ状態に戻るまで4秒ごとに聞きます（曲の終わり際はそこに合わせます。停止中は10〜30秒ごと）。タップ操作はそのとき主役の側に送ります。ただしMediaSession側が危ないとして受け付けないタップ（長く止まったままの鏡）はWeb APIに送るので、再生していた端末に対して効き、スマホに再生が乗っ取られることはありません。APIを呼んだ理由と主役の切り替えは、すべて logcat の `StaaaaandBy` タグに出ます（`hybrid: ...`）。
+
+なぜここまで控えめか: 以前の版は1秒ごとに叩いていました。Spotifyは上限の数字を公開しておらず、上限に当たると `429` と何時間もの `Retry-After` を返すことがあります。そうなると同じアカウントを見ている他のアプリも一緒に止まります。もし `429` を受けたら、再開してよい時刻をスマホに保存し、アプリやスタンバイ画面を開き直してもその時刻まではWeb APIを呼ばず、MediaSessionだけで表示を続けます。
 
 両方の機能を一緒に使う前に、Spotifyの [Developer Policy](https://developer.spotify.com/policy) を読んでください。Spotifyの音源を映像と同期させることが禁じられており、曲に合わせたリリックビデオはまさにそれです。これは個人的な実験です。自分のSpotifyアプリを使い、自分のアカウントの範囲にとどめ、サービスとして他人に提供しないでください。歌詞はLRCLIBのコミュニティデータを実行時に取得するもので、このプロジェクトが権利処理や再配布をしているものではありません。
 
@@ -72,7 +76,7 @@ Galaxy Z Flip 7（One UI）でしか試していません。他社製（特にXi
 
 - **ChargingWatchService**（常駐のフォアグラウンドサービス）が「電源接続」と「画面オフ」を見張り、ワイヤレス（Qi）充電中に画面が消えたら、ロック画面の上に **StandbyActivity** を出します（`showWhenLocked` + `turnScreenOn`）。バックグラウンドからのActivity起動は「他のアプリの上に表示」権限（SYSTEM_ALERT_WINDOW）で許されます
 - 既定ではケーブル（AC/USB）充電では起動せず、スマホが物理的に横向きに置かれているときだけ起動します（充電中は加速度センサーで向きを見続けるので、あとから横に倒しても出ます）。どちらもアプリの「好みの設定」で変えられます: **ケーブル充電でも表示する** / **縦向きでも表示する**。充電が止まると画面は自動で閉じます
-- 再生中の曲情報は **MediaSessionManager** + 通知リスナーから取ります。MediaSessionを使う音楽アプリなら何でも対象で、Spotify専用ではありません
+- 再生中の曲情報は **MediaSessionManager** + 通知リスナーから取ります。MediaSessionを使う音楽アプリなら何でも対象で、Spotify専用ではありません。自分のSpotifyアプリを接続してあるときは、Spotify Web APIがときどき答え合わせをし、食い違っているあいだだけ交代します
 - UIはJetpack Compose。既定は横向き（上下はセンサーで自動判定）、システムバーを全部隠した全画面。縦向きを許可すると全方向センサーに従い、縦用レイアウトに切り替わります
 
 ## プライバシー
@@ -105,7 +109,8 @@ app/src/main/java/com/kazuto/standby/
 ├── media/MediaSessionWatcher.kt        # 端末の MediaSession からの PlaybackSource。鏡切れの見張り
 ├── media/MusicAppKeepAlive.kt          # スタンバイ表示中に音楽アプリのプロセスを生かす（bindService）
 ├── spotify/SpotifyAuth.kt              # Spotify サインイン（PKCE）と Web API 呼び出し
-├── spotify/SpotifyWebPlayer.kt         # GET /me/player を1秒ごとに叩く PlaybackSource
+├── spotify/SpotifyWebPlayer.kt         # 頼まれたときだけ GET /me/player を読む（自分ではポーリングしない）
+├── spotify/HybridPlaybackSource.kt     # 接続中の PlaybackSource。MediaSession が主役、Web API は答え合わせ役で、食い違ったら交代
 ├── lyrics/LyricsRepository.kt          # 再生中の曲の同期歌詞（LRC）を LRCLIB から
 ├── ui/StandbyScreen.kt                 # Compose UI: スリットスキャンまたはリリックビデオ + 時計の重ね描き
 └── ui/LyricVideo.kt                    # assets/lyric（JIZURA）を動かす WebView。曲と再生位置の基準点を渡す

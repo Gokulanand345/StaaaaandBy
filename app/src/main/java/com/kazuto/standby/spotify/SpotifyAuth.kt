@@ -43,6 +43,27 @@ object SpotifyAuth {
 
     private val refreshMutex = Mutex()
 
+    /** 429 に Retry-After が付いていなかったときの待ち(秒) */
+    private const val DEFAULT_RETRY_AFTER_S = 30
+
+    /** これより先の再開時刻は時計の変更などで壊れた値とみなして捨てる */
+    private const val MAX_RATE_LIMIT_MS = 48 * 60 * 60_000L
+
+    /**
+     * 429 のあと、Web API を呼んでよくなるまでの残り(ms)。0 なら呼んでよい。
+     * 再開時刻は Prefs にあるので、アプリや画面を開き直しても引き継がれる。
+     */
+    fun rateLimitedForMs(context: Context): Long {
+        val until = Prefs.spotifyRateLimitedUntil(context)
+        if (until == 0L) return 0L
+        val left = until - System.currentTimeMillis()
+        if (left <= 0L || left > MAX_RATE_LIMIT_MS) {
+            Prefs.setSpotifyRateLimitedUntil(context, 0L)
+            return 0L
+        }
+        return left
+    }
+
     fun isConnected(context: Context): Boolean = Prefs.spotifyTokens(context)?.refreshToken != null
 
     /** ブラウザで Spotify の同意画面を開く。Client ID 未設定なら false。 */
@@ -142,9 +163,15 @@ object SpotifyAuth {
 
     /**
      * Web API を1回叩く。401 はトークンを更新して1回だけやり直す。
-     * 2xx 以外は [SpotifyException] を投げる。
+     * 2xx 以外は [SpotifyException] を投げる。429 は再開時刻を Prefs に保存し、
+     * その時刻までは通信せずに [Kind.RATE_LIMITED] を投げる。
      */
     suspend fun api(context: Context, method: String, path: String, retried: Boolean = false): Response {
+        // 429 の待ちのあいだは通信そのものをしない(呼ぶと待ちが延びるおそれがある)
+        val waitMs = rateLimitedForMs(context)
+        if (waitMs > 0) {
+            throw SpotifyException(Kind.RATE_LIMITED, "Spotify rate limit (still waiting)", ((waitMs + 999) / 1000).toInt())
+        }
         val res = try {
             http(method, "$API$path", null, accessToken(context))
         } catch (e: SpotifyException) {
@@ -157,6 +184,12 @@ object SpotifyAuth {
             return api(context, method, path, retried = true)
         }
         if (res.status in 200..299) return res
+        if (res.status == 429) {
+            val waitS = if (res.retryAfterS > 0) res.retryAfterS else DEFAULT_RETRY_AFTER_S
+            Prefs.setSpotifyRateLimitedUntil(context, System.currentTimeMillis() + waitS * 1000L)
+            Log.w(TAG, "spotify: 429 on $method ${path.substringBefore('?')}, no API calls for ${waitS}s (saved)")
+            throw SpotifyException(Kind.RATE_LIMITED, "Spotify rate limit", waitS)
+        }
         val message = runCatching { JSONObject(res.body).getJSONObject("error").getString("message") }
             .getOrDefault(res.body)
         throw when {
@@ -164,7 +197,6 @@ object SpotifyAuth {
             // 開発モードのアプリは User Management に無いアカウントに全部 403 を返す
             res.status == 403 && message.contains("not registered", ignoreCase = true) ->
                 SpotifyException(Kind.NOT_REGISTERED, "This Spotify account is not on the app's User Management list")
-            res.status == 429 -> SpotifyException(Kind.RATE_LIMITED, "Spotify rate limit", res.retryAfterS)
             res.status >= 500 -> SpotifyException(Kind.TRANSIENT, "Spotify ${res.status}")
             else -> SpotifyException(Kind.COMMAND, "Spotify ${res.status}: $message")
         }
